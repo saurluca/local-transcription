@@ -28,7 +28,7 @@ bind = SUPER, V, exec, uv run local-transcription toggle
 
 Each recording session types at the **focused cursor**. Text from earlier sessions is **not** removed; new dictation is inserted at the cursor. If you finished a previous dictation and start another with the cursor at the end of that text, a space is inserted before the new text when `LT_APPEND_SPACE=1` (default).
 
-Partial updates during recording replace only what the **current** session typed, not older text in the field.
+While recording, nothing is typed yet. When you stop, the full audio is transcribed once and the complete text is inserted in a single step.
 
 ## Language (German / English)
 
@@ -57,15 +57,7 @@ uv run local-transcription daemon --language en
 | `LT_DEVICE` | `GPU` | OpenVINO device (`GPU`, `CPU`, `NPU`) |
 | `LT_HF_MODEL` | `openai/whisper-turbo` | Model id for `download-model` (also `openai/whisper-small`, `openai/whisper-medium`, …) |
 | `LT_MODEL_DIR` | `~/.local/share/.../whisper-turbo` | Path to converted OpenVINO model |
-| `LT_STREAM_PARTIALS` | `1` | Live partial text while recording (`0` = final only) |
-| `LT_PARTIAL_INTERVAL` | `0.45` | Seconds between partial transcriptions |
-| `LT_PARTIAL_WINDOW` | `0` | `0` = transcribe full buffer per partial (coherent, recommended on GPU). Set to e.g. `4.0` for a sliding window only on slow CPU setups |
-| `LT_MIN_PARTIAL_AUDIO` | `0.8` | Minimum recorded seconds before first partial |
-| `LT_PARTIAL_JOIN_TIMEOUT` | `10` | Seconds to wait for partial thread on stop |
-| `LT_SKIP_FINAL_IF_PARTIAL` | `1` | Skip final transcription when partial text is already up to date |
-| `LT_NUM_BEAMS` | `1` | Beam search width for partial and final passes |
-| `LT_FINAL_NUM_BEAMS` | same as `LT_NUM_BEAMS` | Beam width for final pass only (opt-in quality mode with `>1`) |
-| `LT_FINAL_DEVICE` | _(unset)_ | Optional separate device for quality final pass (e.g. `CPU` with `LT_FINAL_NUM_BEAMS=5`) |
+| `LT_NUM_BEAMS` | `1` | Beam search width for transcription |
 | `LT_STOPPING_WAIT` | `15` | Seconds to wait when toggling during an in-progress stop |
 | `LT_APPEND_SPACE` | `1` | Leading space before next session after a successful dictation |
 | `LT_TYPING_BACKEND` | `auto` | `wtype`, `dotool`, `ydotool`, or `clipboard` |
@@ -75,11 +67,9 @@ uv run local-transcription daemon --language en
 ## Troubleshooting
 
 - **Old text appears before new dictation** — Expected when appending at the cursor: place the cursor where you want new text. Previous dictation stays to the left.
-- **Wrong or garbled text** — Check cursor focus and window; try `LT_STREAM_PARTIALS=0` for final-only typing.
-- **Empty recording left partial text** — Partials are discarded automatically on stop with no speech.
-- **Poor DE/EN quality** — Default is [Whisper turbo](https://github.com/openai/whisper) (`large-v3-turbo`, ~809M params). For even higher accuracy try `openai/whisper-medium` or force `LT_LANGUAGE=de` / `en`. For higher final quality at the cost of latency: `LT_FINAL_DEVICE=CPU LT_FINAL_NUM_BEAMS=5`.
-- **GPU crash on stop / "Not Implemented"** — Intel Arc does not support `num_beams>1` on GPU. Default is `LT_NUM_BEAMS=1`. The transcriber retries automatically with beams=1 if needed.
-- **Partials derail / repeat ("city of the city ...") or switch language** — Caused by transcribing short isolated windows. Keep `LT_PARTIAL_WINDOW=0` (default) so each partial uses the full buffer with one coherent language decision.
+- **Wrong or garbled text** — Check cursor focus and window; try forcing `LT_LANGUAGE=de` or `en`.
+- **Poor DE/EN quality** — Default is [Whisper turbo](https://github.com/openai/whisper) (`large-v3-turbo`, ~809M params). For even higher accuracy try `openai/whisper-medium` or force `LT_LANGUAGE=de` / `en`.
+- **GPU crash / "Not Implemented"** — Intel Arc does not support `num_beams>1` on GPU. Default is `LT_NUM_BEAMS=1`. The transcriber retries automatically with beams=1 if needed.
 - **Daemon already running** — `uv run local-transcription shutdown` or remove stale PID under `$XDG_RUNTIME_DIR/local-transcription.pid`.
 
 ## Commands

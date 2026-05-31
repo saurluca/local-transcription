@@ -6,13 +6,11 @@ import socket
 import threading
 import time
 
-import numpy as np
-
 from local_transcription.config import SETTINGS, Settings, normalize_language
 from local_transcription.log import get_logger
 from local_transcription.recorder import AudioRecorder
 from local_transcription.transcriber import Transcriber
-from local_transcription.typer import StreamingTyper, create_output
+from local_transcription.typer import DictationTyper, create_output
 
 log = get_logger("daemon")
 
@@ -33,20 +31,11 @@ class DictationSession:
             device=settings.device,
             language=language,
             num_beams=settings.num_beams,
-            final_num_beams=settings.final_num_beams,
-            final_device=settings.final_device,
         )
-        self._typer = StreamingTyper(
+        self._typer = DictationTyper(
             create_output(settings.typing_backend),
             append_space=settings.append_space,
         )
-        self._stop_partial = threading.Event()
-        self._partial_busy = threading.Event()
-        self._partial_thread: threading.Thread | None = None
-        self._last_partial_text = ""
-        self._last_partial_sample_count = 0
-        self._partial_prefix_text = ""
-        self._partial_prefix_samples = 0
         log.info("Typing backend: %s", self._typer.backend)
         log.info("Session ready")
 
@@ -115,102 +104,11 @@ class DictationSession:
             if self._state == "recording":
                 log.debug("Already recording")
                 return
-            self._last_partial_text = ""
-            self._last_partial_sample_count = 0
-            self._partial_prefix_text = ""
-            self._partial_prefix_samples = 0
-            self._typer.begin_session()
             self._recorder.start()
             self._state = "recording"
             self._notify("Dictation started")
-            if self._settings.stream_partials:
-                self._stop_partial.clear()
-                self._partial_thread = threading.Thread(
-                    target=self._partial_loop,
-                    daemon=True,
-                    name="partial-transcription",
-                )
-                self._partial_thread.start()
-                window = self._settings.partial_window_s
-                window_label = "full audio" if window <= 0 else f"{window:.2f}s window"
-                log.info(
-                    "Partial streaming enabled (every %.2fs, %s)",
-                    self._settings.partial_interval_s,
-                    window_label,
-                )
-            else:
-                log.info("Partial streaming disabled")
 
         log.info("Dictation recording active — speak now")
-
-    @staticmethod
-    def _audio_is_silent(audio: np.ndarray, *, rms_threshold: float = 0.008) -> bool:
-        if audio.size == 0:
-            return True
-        rms = float(np.sqrt(np.mean(np.square(audio, dtype=np.float64))))
-        return rms < rms_threshold
-
-    @staticmethod
-    def _merge_partial_text(prefix: str, tail: str) -> str:
-        prefix = prefix.strip()
-        tail = tail.strip()
-        if not prefix:
-            return tail
-        if not tail:
-            return prefix
-        if tail in prefix:
-            return prefix
-        if prefix in tail:
-            return tail
-
-        prefix_words = prefix.split()
-        tail_words = tail.split()
-        max_overlap = min(len(prefix_words), len(tail_words))
-        for overlap in range(max_overlap, 0, -1):
-            if prefix_words[-overlap:] == tail_words[:overlap]:
-                return " ".join(prefix_words + tail_words[overlap:])
-        return f"{prefix} {tail}"
-
-    def _transcribe_partial(self, full_audio: np.ndarray) -> str:
-        window_samples = int(self._settings.partial_window_s * self._settings.sample_rate)
-        # Window disabled (<= 0): always transcribe the full buffer. On a fast GPU
-        # this is just as quick and keeps language/context coherent. The windowed
-        # path is only worthwhile on slow CPU setups with long recordings.
-        if window_samples <= 0 or len(full_audio) <= window_samples:
-            return self._transcriber.transcribe(full_audio, fast=True)
-
-        prefix_end = len(full_audio) - window_samples
-        refresh_threshold = window_samples // 2
-        if prefix_end > self._partial_prefix_samples + refresh_threshold:
-            prefix_audio = full_audio[:prefix_end]
-            self._partial_prefix_text = self._transcriber.transcribe(prefix_audio, fast=True)
-            self._partial_prefix_samples = prefix_end
-            log.debug(
-                "Refreshed partial prefix (%.2fs audio): %r",
-                prefix_end / self._settings.sample_rate,
-                self._partial_prefix_text[:80],
-            )
-
-        tail_audio = full_audio[prefix_end:]
-        tail_text = self._transcriber.transcribe(tail_audio, fast=True)
-        return self._merge_partial_text(self._partial_prefix_text, tail_text)
-
-    def _should_skip_final(self, audio: np.ndarray) -> bool:
-        if not self._settings.stream_partials:
-            return False
-        if not self._settings.skip_final_if_partial:
-            return False
-        if not self._last_partial_text:
-            return False
-        if self._last_partial_text != self._typer.session_text:
-            return False
-
-        current_samples = len(audio)
-        if current_samples <= self._last_partial_sample_count:
-            return True
-
-        trailing = audio[self._last_partial_sample_count :]
-        return self._audio_is_silent(trailing)
 
     def stop(self) -> None:
         with self._lock:
@@ -221,37 +119,22 @@ class DictationSession:
 
         try:
             log.info("Stopping dictation ...")
-            self._stop_partial.set()
-            if self._partial_thread and self._partial_thread.is_alive():
-                self._partial_thread.join(timeout=self._settings.partial_join_timeout_s)
-            if self._partial_busy.is_set():
-                log.debug("Waiting for in-flight partial transcription")
-                self._partial_busy.wait(timeout=self._settings.partial_join_timeout_s)
-
             self._recorder.stop()
             audio = self._recorder.get_audio()
 
             final_text = ""
-            if self._should_skip_final(audio):
-                log.info("Skipping final pass — partial already up to date")
-                final_text = self._last_partial_text
-            else:
-                log.info("Running final transcription ...")
-                try:
-                    final_text = self._transcriber.transcribe(audio, fast=False)
-                except Exception as exc:
-                    log.exception("Final transcription failed: %s", exc)
-                    if self._last_partial_text:
-                        log.info("Keeping last partial transcript after failure")
-                        final_text = self._last_partial_text
+            log.info("Running transcription ...")
+            try:
+                final_text = self._transcriber.transcribe(audio)
+            except Exception as exc:
+                log.exception("Transcription failed: %s", exc)
 
             try:
                 if final_text:
-                    log.info("Typing final transcript (%d chars)", len(final_text))
-                    self._typer.finalize(final_text)
+                    log.info("Typing transcript (%d chars)", len(final_text))
+                    self._typer.type_transcript(final_text)
                 else:
                     log.warning("No speech detected in recording")
-                    self._typer.discard_session()
             except RuntimeError as exc:
                 log.error("Failed to type transcript: %s", exc)
         finally:
@@ -259,50 +142,6 @@ class DictationSession:
                 self._state = "idle"
             self._notify("Dictation stopped")
             log.info("Dictation idle")
-
-    def _partial_loop(self) -> None:
-        log.debug("Partial transcription thread started")
-        last_sent = ""
-        cycle = 0
-        while not self._stop_partial.is_set():
-            time.sleep(self._settings.partial_interval_s)
-            cycle += 1
-            duration = self._recorder.duration_s()
-            if duration < self._settings.min_partial_audio_s:
-                log.debug(
-                    "Partial cycle %d: waiting for audio (%.2fs / %.2fs needed)",
-                    cycle,
-                    duration,
-                    self._settings.min_partial_audio_s,
-                )
-                continue
-
-            window_s = min(duration, self._settings.partial_window_s)
-            log.debug("Partial cycle %d: transcribing (window up to %.2fs)", cycle, window_s)
-
-            self._partial_busy.set()
-            try:
-                full_audio = self._recorder.get_audio()
-                partial = self._transcribe_partial(full_audio)
-                self._last_partial_sample_count = len(full_audio)
-                if self._stop_partial.is_set():
-                    log.debug("Partial cycle %d: stop requested after transcribe", cycle)
-                    break
-                if not partial or partial == last_sent:
-                    log.debug("Partial cycle %d: no new text", cycle)
-                    continue
-
-                try:
-                    log.info("Partial update: %r", partial)
-                    self._typer.update(partial)
-                    last_sent = partial
-                    self._last_partial_text = partial
-                except RuntimeError as exc:
-                    log.error("Partial typing failed: %s", exc)
-            finally:
-                self._partial_busy.clear()
-
-        log.debug("Partial transcription thread stopped")
 
     @staticmethod
     def _notify(message: str) -> None:

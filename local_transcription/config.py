@@ -33,19 +33,7 @@ class Settings:
     language: str = os.environ.get("LT_LANGUAGE", "auto")
     device: str = os.environ.get("LT_DEVICE", "GPU")
     sample_rate: int = 16_000
-    partial_interval_s: float = float(os.environ.get("LT_PARTIAL_INTERVAL", "0.45"))
-    min_partial_audio_s: float = float(os.environ.get("LT_MIN_PARTIAL_AUDIO", "0.8"))
-    partial_join_timeout_s: float = float(
-        os.environ.get("LT_PARTIAL_JOIN_TIMEOUT", "10")
-    )
-    stream_partials: bool = os.environ.get("LT_STREAM_PARTIALS", "1") != "0"
-    partial_window_s: float = float(os.environ.get("LT_PARTIAL_WINDOW", "0"))
-    skip_final_if_partial: bool = os.environ.get("LT_SKIP_FINAL_IF_PARTIAL", "1") != "0"
     num_beams: int = int(os.environ.get("LT_NUM_BEAMS", "1"))
-    final_num_beams: int = int(
-        os.environ.get("LT_FINAL_NUM_BEAMS", os.environ.get("LT_NUM_BEAMS", "1"))
-    )
-    final_device: str | None = os.environ.get("LT_FINAL_DEVICE") or None
     append_space: bool = os.environ.get("LT_APPEND_SPACE", "1") != "0"
     typing_backend: str = os.environ.get("LT_TYPING_BACKEND", "auto")
     stopping_wait_timeout_s: float = float(os.environ.get("LT_STOPPING_WAIT", "15"))
