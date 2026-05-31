@@ -2,6 +2,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from local_transcription.focus import parse_terminal_classes
 from local_transcription.models import default_model_dir
 
 ALLOWED_LANGUAGES = frozenset({"auto", "de", "en"})
@@ -38,6 +39,12 @@ class Settings:
     typing_backend: str = os.environ.get("LT_TYPING_BACKEND", "auto")
     paste_delay_ms: int = int(os.environ.get("LT_PASTE_DELAY_MS", "120"))
     clipboard_restore: bool = os.environ.get("LT_CLIPBOARD_RESTORE", "1") != "0"
+    terminal_classes: frozenset[str] = (
+        frozenset()
+        if "LT_TERMINAL_CLASSES" in os.environ
+        and os.environ["LT_TERMINAL_CLASSES"].strip() == ""
+        else parse_terminal_classes(os.environ.get("LT_TERMINAL_CLASSES"))
+    )
     overlay: bool = os.environ.get("LT_OVERLAY", "1") != "0"
     overlay_margin_bottom: int = int(os.environ.get("LT_OVERLAY_MARGIN", "32"))
     notify: bool = os.environ.get("LT_NOTIFY", "0") != "0"

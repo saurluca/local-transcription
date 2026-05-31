@@ -39,6 +39,7 @@ class DictationSession:
                 settings.typing_backend,
                 paste_delay_ms=settings.paste_delay_ms,
                 clipboard_restore=settings.clipboard_restore,
+                terminal_classes=settings.terminal_classes,
             ),
             append_space=settings.append_space,
         )

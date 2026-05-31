@@ -1,6 +1,6 @@
 # local-transcription
 
-Offline push-to-talk dictation with OpenVINO Whisper (Intel CPU/GPU/NPU). Inserts text into the focused application via clipboard paste (Ctrl+V) by default, with `wtype`, `dotool`, or `ydotool` as keystroke-injection fallbacks.
+Offline push-to-talk dictation with OpenVINO Whisper (Intel CPU/GPU/NPU). Inserts text into the focused application via clipboard paste (`Ctrl+V`, or `Ctrl+Shift+V` in terminals such as Alacritty) by default, with `wtype`, `dotool`, or `ydotool` as keystroke-injection fallbacks. Terminal detection uses Hyprland (`hyprctl activewindow`).
 
 ## Quick start
 
@@ -31,7 +31,7 @@ Each recording session types at the **focused cursor**. Text from earlier sessio
 
 While recording, a small floating indicator appears at the bottom center of the screen (Wayland layer-shell overlay): **Recording ●** (red, pulsing). When you stop, it switches to **Transcribing ●** (orange) while Whisper runs, then disappears.
 
-When you stop, the full audio is transcribed once and the complete text is inserted in a single step.
+When you stop, the full audio is transcribed once and the complete text is inserted in a single step. With the default `clipboard` backend, the daemon copies to the clipboard and sends a paste shortcut: `Ctrl+Shift+V` when the focused window class matches `LT_TERMINAL_CLASSES` (e.g. Alacritty), otherwise `Ctrl+V`.
 
 ## Language (German / English)
 
@@ -64,8 +64,9 @@ uv run local-transcription daemon --language en
 | `LT_STOPPING_WAIT` | `15` | Seconds to wait when toggling during an in-progress stop |
 | `LT_APPEND_SPACE` | `1` | Leading space before next session after a successful dictation |
 | `LT_TYPING_BACKEND` | `auto` | `clipboard` (preferred), `wtype`, `dotool`, or `ydotool`. `auto` tries `clipboard` first |
-| `LT_PASTE_DELAY_MS` | `120` | Delay before sending Ctrl+V so focus settles (clipboard backend) |
+| `LT_PASTE_DELAY_MS` | `120` | Delay before sending the paste shortcut so focus settles (clipboard backend) |
 | `LT_CLIPBOARD_RESTORE` | `1` | Restore previous clipboard content after pasting (`0` to disable) |
+| `LT_TERMINAL_CLASSES` | `Alacritty,kitty,foot,…` | Comma-separated Hyprland window classes that get `Ctrl+Shift+V` paste. Empty string disables terminal detection (always `Ctrl+V`). Check class with `hyprctl activewindow -j` |
 | `LT_OVERLAY` | `1` | Floating recording indicator (bottom center, gtk-layer-shell) |
 | `LT_OVERLAY_MARGIN` | `32` | Distance from bottom screen edge in pixels |
 | `LT_LOG_LEVEL` | `INFO` | `DEBUG` for verbose logs |
@@ -76,7 +77,7 @@ uv run local-transcription daemon --language en
 - **Old text appears before new dictation** — Expected when appending at the cursor: place the cursor where you want new text. Previous dictation stays to the left.
 - **Wrong or garbled text** — Check cursor focus and window; try forcing `LT_LANGUAGE=de` or `en`.
 - **Missing spaces / lost focus / text in the wrong place (browsers, Cursor, Electron apps)** — Caused by per-character key injection (`wtype`) being throttled by Chromium/Electron. The default `clipboard` backend (atomic Ctrl+V) fixes this. If it still misbehaves, increase `LT_PASTE_DELAY_MS` (e.g. `200`).
-- **Nothing pastes in a terminal** — Some terminals use `Ctrl+Shift+V` instead of `Ctrl+V`. Use a keystroke backend there (`LT_TYPING_BACKEND=wtype`) or enable the terminal's `Ctrl+V` paste.
+- **Nothing pastes in a terminal** — The `clipboard` backend sends `Ctrl+Shift+V` for classes in `LT_TERMINAL_CLASSES` (Alacritty is included by default). Confirm the window class with `hyprctl activewindow -j` and add it to the list if needed. Set `LT_LOG_LEVEL=DEBUG` to see which paste chord was used. If `hyprctl` is unavailable, paste falls back to `Ctrl+V`. Set `LT_TERMINAL_CLASSES=""` to disable terminal detection.
 - **No recording indicator** — The uv venv is isolated from system Python; install overlay deps once:
 
   ```bash

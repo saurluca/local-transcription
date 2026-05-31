@@ -6,6 +6,10 @@ import threading
 import time
 from abc import ABC, abstractmethod
 
+from local_transcription.focus import (
+    active_window_class,
+    uses_terminal_paste,
+)
 from local_transcription.log import get_logger
 
 log = get_logger("typer")
@@ -22,18 +26,43 @@ class TextOutput(ABC):
         raise NotImplementedError
 
 
-def _paste_tool() -> list[str] | None:
-    """Return the command prefix able to send a Ctrl+V keystroke."""
+def _paste_command(*, shift: bool = False) -> list[str] | None:
+    """Return a command that sends Ctrl+V or Ctrl+Shift+V."""
     if shutil.which("wtype"):
+        if shift:
+            return [
+                "wtype",
+                "-M",
+                "ctrl",
+                "-M",
+                "shift",
+                "-k",
+                "v",
+                "-m",
+                "shift",
+                "-m",
+                "ctrl",
+            ]
         return ["wtype", "-M", "ctrl", "-k", "v", "-m", "ctrl"]
     if shutil.which("ydotool"):
-        # ydotool key codes: 29 = leftctrl, 47 = v (press=:1, release=:0)
+        # ydotool key codes: 29 = leftctrl, 42 = leftshift, 47 = v
+        if shift:
+            return [
+                "ydotool",
+                "key",
+                "29:1",
+                "42:1",
+                "47:1",
+                "47:0",
+                "42:0",
+                "29:0",
+            ]
         return ["ydotool", "key", "29:1", "47:1", "47:0", "29:0"]
     return None
 
 
 class ClipboardOutput(TextOutput):
-    """Insert text by copying it to the clipboard and sending Ctrl+V.
+    """Insert text via clipboard paste (Ctrl+V or Ctrl+Shift+V in terminals).
 
     This is far more reliable than per-character key injection in
     Chromium/Electron apps (browsers, Cursor, ...), where rapid synthetic
@@ -43,13 +72,20 @@ class ClipboardOutput(TextOutput):
 
     name = "clipboard"
 
-    def __init__(self, *, paste_delay_ms: int = 120, restore: bool = True) -> None:
+    def __init__(
+        self,
+        *,
+        paste_delay_ms: int = 120,
+        restore: bool = True,
+        terminal_classes: frozenset[str] | None = None,
+    ) -> None:
         self._paste_delay_s = max(paste_delay_ms, 0) / 1000.0
         self._restore = restore
+        self._terminal_classes = terminal_classes or frozenset()
 
     @staticmethod
     def available() -> bool:
-        return bool(shutil.which("wl-copy") and _paste_tool())
+        return bool(shutil.which("wl-copy") and _paste_command(shift=False))
 
     def _read_clipboard(self) -> str | None:
         if not shutil.which("wl-paste"):
@@ -69,10 +105,20 @@ class ClipboardOutput(TextOutput):
         if not text:
             return True
 
-        paste = _paste_tool()
+        window_class = active_window_class()
+        use_shift = uses_terminal_paste(window_class, self._terminal_classes)
+        paste = _paste_command(shift=use_shift)
         if not shutil.which("wl-copy") or paste is None:
             log.error("clipboard backend requires wl-copy and wtype/ydotool")
             return False
+
+        chord = "ctrl+shift+v" if use_shift else "ctrl+v"
+        log.debug(
+            "Paste chord %s (class=%s, terminal_classes=%s)",
+            chord,
+            window_class,
+            bool(self._terminal_classes),
+        )
 
         previous = self._read_clipboard() if self._restore else None
 
@@ -139,6 +185,7 @@ def create_output(
     *,
     paste_delay_ms: int = 120,
     clipboard_restore: bool = True,
+    terminal_classes: frozenset[str] | None = None,
 ) -> TextOutput:
     order: list[str]
     if backend == "auto":
@@ -150,6 +197,7 @@ def create_output(
         return ClipboardOutput(
             paste_delay_ms=paste_delay_ms,
             restore=clipboard_restore,
+            terminal_classes=terminal_classes,
         )
 
     factories: dict[str, type[TextOutput] | object] = {
