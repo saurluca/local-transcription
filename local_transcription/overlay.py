@@ -107,8 +107,8 @@ class DictationOverlay:
         }
         #dictation-indicator-box {
             background-color: alpha(#1a1a1a, 0.72);
-            border-radius: 16px;
-            padding: 8px 14px;
+            border-radius: 20px;
+            padding: 11px 19px;
         }
         #dictation-indicator-box.recording #dictation-indicator-dot {
             color: #ff4444;
@@ -118,14 +118,14 @@ class DictationOverlay:
         }
         #dictation-indicator-label {
             color: #eeeeee;
-            font-size: 13px;
+            font-size: 16px;
             font-weight: 600;
         }
         #dictation-indicator-box.stopping #dictation-indicator-label {
             color: #ffcc88;
         }
         #dictation-indicator-dot {
-            font-size: 20px;
+            font-size: 26px;
             font-weight: bold;
         }
         """
@@ -154,7 +154,7 @@ class DictationOverlay:
         GtkLayerShell.set_keyboard_mode(window, GtkLayerShell.KeyboardMode.NONE)
         GtkLayerShell.set_exclusive_zone(window, -1)
 
-        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=11)
         box.set_name("dictation-indicator-box")
         label = Gtk.Label(label="")
         label.set_name("dictation-indicator-label")
