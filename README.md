@@ -1,6 +1,6 @@
 # local-transcription
 
-Offline push-to-talk dictation with OpenVINO Whisper (Intel CPU/GPU/NPU). Types into the focused application via `wtype`, `dotool`, or `ydotool`.
+Offline push-to-talk dictation with OpenVINO Whisper (Intel CPU/GPU/NPU). Inserts text into the focused application via clipboard paste (Ctrl+V) by default, with `wtype`, `dotool`, or `ydotool` as keystroke-injection fallbacks.
 
 ## Quick start
 
@@ -60,7 +60,9 @@ uv run local-transcription daemon --language en
 | `LT_NUM_BEAMS` | `1` | Beam search width for transcription |
 | `LT_STOPPING_WAIT` | `15` | Seconds to wait when toggling during an in-progress stop |
 | `LT_APPEND_SPACE` | `1` | Leading space before next session after a successful dictation |
-| `LT_TYPING_BACKEND` | `auto` | `wtype`, `dotool`, `ydotool`, or `clipboard` |
+| `LT_TYPING_BACKEND` | `auto` | `clipboard` (preferred), `wtype`, `dotool`, or `ydotool`. `auto` tries `clipboard` first |
+| `LT_PASTE_DELAY_MS` | `120` | Delay before sending Ctrl+V so focus settles (clipboard backend) |
+| `LT_CLIPBOARD_RESTORE` | `1` | Restore previous clipboard content after pasting (`0` to disable) |
 | `LT_LOG_LEVEL` | `INFO` | `DEBUG` for verbose logs |
 | `LT_NOTIFY` | `1` | Desktop notifications via `notify-send` (`0` to disable) |
 
@@ -68,6 +70,8 @@ uv run local-transcription daemon --language en
 
 - **Old text appears before new dictation** — Expected when appending at the cursor: place the cursor where you want new text. Previous dictation stays to the left.
 - **Wrong or garbled text** — Check cursor focus and window; try forcing `LT_LANGUAGE=de` or `en`.
+- **Missing spaces / lost focus / text in the wrong place (browsers, Cursor, Electron apps)** — Caused by per-character key injection (`wtype`) being throttled by Chromium/Electron. The default `clipboard` backend (atomic Ctrl+V) fixes this. If it still misbehaves, increase `LT_PASTE_DELAY_MS` (e.g. `200`).
+- **Nothing pastes in a terminal** — Some terminals use `Ctrl+Shift+V` instead of `Ctrl+V`. Use a keystroke backend there (`LT_TYPING_BACKEND=wtype`) or enable the terminal's `Ctrl+V` paste.
 - **Poor DE/EN quality** — Default is [Whisper turbo](https://github.com/openai/whisper) (`large-v3-turbo`, ~809M params). For even higher accuracy try `openai/whisper-medium` or force `LT_LANGUAGE=de` / `en`.
 - **GPU crash / "Not Implemented"** — Intel Arc does not support `num_beams>1` on GPU. Default is `LT_NUM_BEAMS=1`. The transcriber retries automatically with beams=1 if needed.
 - **Daemon already running** — `uv run local-transcription shutdown` or remove stale PID under `$XDG_RUNTIME_DIR/local-transcription.pid`.

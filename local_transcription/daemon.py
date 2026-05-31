@@ -33,7 +33,11 @@ class DictationSession:
             num_beams=settings.num_beams,
         )
         self._typer = DictationTyper(
-            create_output(settings.typing_backend),
+            create_output(
+                settings.typing_backend,
+                paste_delay_ms=settings.paste_delay_ms,
+                clipboard_restore=settings.clipboard_restore,
+            ),
             append_space=settings.append_space,
         )
         log.info("Typing backend: %s", self._typer.backend)

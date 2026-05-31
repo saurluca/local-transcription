@@ -36,6 +36,8 @@ class Settings:
     num_beams: int = int(os.environ.get("LT_NUM_BEAMS", "1"))
     append_space: bool = os.environ.get("LT_APPEND_SPACE", "1") != "0"
     typing_backend: str = os.environ.get("LT_TYPING_BACKEND", "auto")
+    paste_delay_ms: int = int(os.environ.get("LT_PASTE_DELAY_MS", "120"))
+    clipboard_restore: bool = os.environ.get("LT_CLIPBOARD_RESTORE", "1") != "0"
     stopping_wait_timeout_s: float = float(os.environ.get("LT_STOPPING_WAIT", "15"))
     socket_path: Path = _runtime_dir() / "local-transcription.sock"
     pid_path: Path = _runtime_dir() / "local-transcription.pid"

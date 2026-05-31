@@ -3,6 +3,7 @@ from __future__ import annotations
 import shutil
 import subprocess
 import threading
+import time
 from abc import ABC, abstractmethod
 
 from local_transcription.log import get_logger
@@ -19,6 +20,80 @@ class TextOutput(ABC):
     @abstractmethod
     def name(self) -> str:
         raise NotImplementedError
+
+
+def _paste_tool() -> list[str] | None:
+    """Return the command prefix able to send a Ctrl+V keystroke."""
+    if shutil.which("wtype"):
+        return ["wtype", "-M", "ctrl", "-k", "v", "-m", "ctrl"]
+    if shutil.which("ydotool"):
+        # ydotool key codes: 29 = leftctrl, 47 = v (press=:1, release=:0)
+        return ["ydotool", "key", "29:1", "47:1", "47:0", "29:0"]
+    return None
+
+
+class ClipboardOutput(TextOutput):
+    """Insert text by copying it to the clipboard and sending Ctrl+V.
+
+    This is far more reliable than per-character key injection in
+    Chromium/Electron apps (browsers, Cursor, ...), where rapid synthetic
+    keystrokes get throttled or dropped — causing missing spaces, lost
+    focus, or keystrokes leaking into the wrong widget.
+    """
+
+    name = "clipboard"
+
+    def __init__(self, *, paste_delay_ms: int = 120, restore: bool = True) -> None:
+        self._paste_delay_s = max(paste_delay_ms, 0) / 1000.0
+        self._restore = restore
+
+    @staticmethod
+    def available() -> bool:
+        return bool(shutil.which("wl-copy") and _paste_tool())
+
+    def _read_clipboard(self) -> str | None:
+        if not shutil.which("wl-paste"):
+            return None
+        try:
+            result = subprocess.run(
+                ["wl-paste", "--no-newline"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except OSError:
+            return None
+        return result.stdout if result.returncode == 0 else None
+
+    def type_text(self, text: str) -> bool:
+        if not text:
+            return True
+
+        paste = _paste_tool()
+        if not shutil.which("wl-copy") or paste is None:
+            log.error("clipboard backend requires wl-copy and wtype/ydotool")
+            return False
+
+        previous = self._read_clipboard() if self._restore else None
+
+        if subprocess.run(["wl-copy", "--", text], check=False).returncode != 0:
+            log.error("wl-copy failed to set clipboard")
+            return False
+
+        if self._paste_delay_s:
+            time.sleep(self._paste_delay_s)
+
+        ok = subprocess.run(paste, check=False).returncode == 0
+        if not ok:
+            log.error("paste keystroke (%s) failed", paste[0])
+
+        if self._restore and previous is not None:
+            # Give the target app a moment to consume the paste before
+            # we put the old clipboard content back.
+            time.sleep(max(self._paste_delay_s, 0.1))
+            subprocess.run(["wl-copy", "--", previous], check=False)
+
+        return ok
 
 
 class WtypeOutput(TextOutput):
@@ -59,45 +134,49 @@ class YdotoolOutput(TextOutput):
         return subprocess.run(["ydotool", "type", "--", text], check=False).returncode == 0
 
 
-class ClipboardOutput(TextOutput):
-    name = "clipboard"
-
-    def type_text(self, text: str) -> bool:
-        if not text:
-            return True
-        if shutil.which("wl-copy"):
-            copy = subprocess.run(["wl-copy", "--", text], check=False)
-            paste = subprocess.run(["wtype", "-M", "ctrl", "-k", "v"], check=False)
-            return copy.returncode == 0 and paste.returncode == 0
-        return False
-
-
-def create_output(backend: str = "auto") -> TextOutput:
+def create_output(
+    backend: str = "auto",
+    *,
+    paste_delay_ms: int = 120,
+    clipboard_restore: bool = True,
+) -> TextOutput:
     order: list[str]
     if backend == "auto":
-        order = ["wtype", "dotool", "ydotool", "clipboard"]
+        order = ["clipboard", "wtype", "dotool", "ydotool"]
     else:
         order = [backend]
 
-    factories: dict[str, type[TextOutput]] = {
+    def make_clipboard() -> ClipboardOutput:
+        return ClipboardOutput(
+            paste_delay_ms=paste_delay_ms,
+            restore=clipboard_restore,
+        )
+
+    factories: dict[str, type[TextOutput] | object] = {
+        "clipboard": make_clipboard,
         "wtype": WtypeOutput,
         "dotool": DotoolOutput,
         "ydotool": YdotoolOutput,
-        "clipboard": ClipboardOutput,
     }
 
     for name in order:
-        if name not in factories:
+        factory = factories.get(name)
+        if factory is None:
             continue
-        if name != "clipboard" and not shutil.which(name):
+        if name == "clipboard":
+            if not ClipboardOutput.available():
+                log.debug("clipboard backend unavailable (need wl-copy + wtype/ydotool)")
+                continue
+        elif not shutil.which(name):
             log.debug("Typing backend %s not found in PATH", name)
             continue
         log.info("Using typing backend: %s", name)
-        return factories[name]()
+        return factory()  # type: ignore[operator]
 
     raise RuntimeError(
-        "No typing backend found. Install one of: wtype, dotool, ydotool "
-        "(Manjaro: sudo pacman -S wtype dotool ydotool)."
+        "No typing backend found. Install one of: wl-clipboard (+ wtype/ydotool), "
+        "wtype, dotool, ydotool "
+        "(Manjaro: sudo pacman -S wl-clipboard wtype dotool ydotool)."
     )
 
 
