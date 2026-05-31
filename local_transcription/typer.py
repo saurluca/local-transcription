@@ -144,6 +144,11 @@ class StreamingTyper:
     def backend(self) -> str:
         return self._output.name
 
+    @property
+    def session_text(self) -> str:
+        with self._lock:
+            return self._session_text
+
     def begin_session(self) -> None:
         with self._lock:
             self._session_text = ""
@@ -157,19 +162,34 @@ class StreamingTyper:
         self._prepend_space_on_next = False
         return f" {text}"
 
+    @staticmethod
+    def _common_prefix_len(a: str, b: str) -> int:
+        limit = min(len(a), len(b))
+        i = 0
+        while i < limit and a[i] == b[i]:
+            i += 1
+        return i
+
     def _replace_session_text(self, text: str) -> None:
         text = self._apply_prepend_space(text.strip())
         if text == self._session_text:
             return
 
-        if self._session_text:
-            log.debug("Deleting %d chars via %s", len(self._session_text), self._output.name)
-            if not self._output.delete_chars(len(self._session_text)):
+        # Only rewrite the part that actually changed: keep the shared prefix
+        # in place, delete the diverging tail, then type the new tail. This
+        # avoids re-deleting and re-typing the whole sentence on every update.
+        shared = self._common_prefix_len(self._session_text, text)
+        to_delete = len(self._session_text) - shared
+        to_type = text[shared:]
+
+        if to_delete > 0:
+            log.debug("Deleting %d trailing chars via %s", to_delete, self._output.name)
+            if not self._output.delete_chars(to_delete):
                 raise RuntimeError(f"{self._output.name} failed to delete partial text")
 
-        if text:
-            log.debug("Typing %d chars via %s", len(text), self._output.name)
-            if not self._output.type_text(text):
+        if to_type:
+            log.debug("Typing %d chars via %s", len(to_type), self._output.name)
+            if not self._output.type_text(to_type):
                 raise RuntimeError(f"{self._output.name} failed to type text")
 
         self._session_text = text

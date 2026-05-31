@@ -5,8 +5,11 @@ Offline push-to-talk dictation with OpenVINO Whisper (Intel CPU/GPU/NPU). Types 
 ## Quick start
 
 ```bash
-# One-time: download the OpenVINO Whisper model (~500 MB for whisper-small)
-uv run local-transcription download-model --model openai/whisper-small
+# One-time: download the OpenVINO Whisper turbo model (~1.6 GB)
+uv run local-transcription download-model
+
+# Or explicitly:
+uv run local-transcription download-model --model openai/whisper-turbo
 
 # Run the daemon (loads the model once)
 uv run local-transcription daemon
@@ -52,11 +55,18 @@ uv run local-transcription daemon --language en
 |----------|---------|-------------|
 | `LT_LANGUAGE` | `auto` | `auto`, `de`, or `en` |
 | `LT_DEVICE` | `GPU` | OpenVINO device (`GPU`, `CPU`, `NPU`) |
-| `LT_MODEL_DIR` | `~/.local/share/.../whisper-small` | Path to converted OpenVINO model |
+| `LT_HF_MODEL` | `openai/whisper-turbo` | Model id for `download-model` (also `openai/whisper-small`, `openai/whisper-medium`, …) |
+| `LT_MODEL_DIR` | `~/.local/share/.../whisper-turbo` | Path to converted OpenVINO model |
 | `LT_STREAM_PARTIALS` | `1` | Live partial text while recording (`0` = final only) |
 | `LT_PARTIAL_INTERVAL` | `0.45` | Seconds between partial transcriptions |
+| `LT_PARTIAL_WINDOW` | `0` | `0` = transcribe full buffer per partial (coherent, recommended on GPU). Set to e.g. `4.0` for a sliding window only on slow CPU setups |
 | `LT_MIN_PARTIAL_AUDIO` | `0.8` | Minimum recorded seconds before first partial |
 | `LT_PARTIAL_JOIN_TIMEOUT` | `10` | Seconds to wait for partial thread on stop |
+| `LT_SKIP_FINAL_IF_PARTIAL` | `1` | Skip final transcription when partial text is already up to date |
+| `LT_NUM_BEAMS` | `1` | Beam search width for partial and final passes |
+| `LT_FINAL_NUM_BEAMS` | same as `LT_NUM_BEAMS` | Beam width for final pass only (opt-in quality mode with `>1`) |
+| `LT_FINAL_DEVICE` | _(unset)_ | Optional separate device for quality final pass (e.g. `CPU` with `LT_FINAL_NUM_BEAMS=5`) |
+| `LT_STOPPING_WAIT` | `15` | Seconds to wait when toggling during an in-progress stop |
 | `LT_APPEND_SPACE` | `1` | Leading space before next session after a successful dictation |
 | `LT_TYPING_BACKEND` | `auto` | `wtype`, `dotool`, `ydotool`, or `clipboard` |
 | `LT_LOG_LEVEL` | `INFO` | `DEBUG` for verbose logs |
@@ -67,7 +77,9 @@ uv run local-transcription daemon --language en
 - **Old text appears before new dictation** — Expected when appending at the cursor: place the cursor where you want new text. Previous dictation stays to the left.
 - **Wrong or garbled text** — Check cursor focus and window; try `LT_STREAM_PARTIALS=0` for final-only typing.
 - **Empty recording left partial text** — Partials are discarded automatically on stop with no speech.
-- **Poor DE/EN quality** — Try `whisper-medium`, `LT_LANGUAGE=de` or `en` if you always use one language, or disable partials under GPU load.
+- **Poor DE/EN quality** — Default is [Whisper turbo](https://github.com/openai/whisper) (`large-v3-turbo`, ~809M params). For even higher accuracy try `openai/whisper-medium` or force `LT_LANGUAGE=de` / `en`. For higher final quality at the cost of latency: `LT_FINAL_DEVICE=CPU LT_FINAL_NUM_BEAMS=5`.
+- **GPU crash on stop / "Not Implemented"** — Intel Arc does not support `num_beams>1` on GPU. Default is `LT_NUM_BEAMS=1`. The transcriber retries automatically with beams=1 if needed.
+- **Partials derail / repeat ("city of the city ...") or switch language** — Caused by transcribing short isolated windows. Keep `LT_PARTIAL_WINDOW=0` (default) so each partial uses the full buffer with one coherent language decision.
 - **Daemon already running** — `uv run local-transcription shutdown` or remove stale PID under `$XDG_RUNTIME_DIR/local-transcription.pid`.
 
 ## Commands
@@ -78,4 +90,15 @@ uv run local-transcription daemon --language en
 | `toggle` / `start` / `stop` | Control recording |
 | `status` | `IDLE` or `RECORDING` |
 | `shutdown` | Stop the daemon |
-| `download-model` | Fetch OpenVINO Whisper weights |
+| `download-model` | Fetch OpenVINO Whisper weights (default: turbo) |
+
+### Supported models
+
+Pre-converted OpenVINO models from [OpenVINO on Hugging Face](https://huggingface.co/OpenVINO):
+
+| CLI `--model` | OpenVINO repo | Notes |
+|---------------|---------------|-------|
+| `openai/whisper-turbo` (default) | `whisper-large-v3-turbo-fp16-ov` | Best speed/quality tradeoff (~8× faster than large) |
+| `openai/whisper-small` | `whisper-small-fp16-ov` | Lighter, lower VRAM |
+| `openai/whisper-medium` | `whisper-medium-fp16-ov` | Higher accuracy, slower |
+| `openai/whisper-tiny` / `base` | … | Fastest, least accurate |

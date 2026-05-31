@@ -80,5 +80,14 @@ class AudioRecorder:
                 return np.array([], dtype=np.float32)
             return np.concatenate(self._chunks, axis=0).flatten()
 
+    def get_audio_tail(self, seconds: float) -> NDArray[np.float32]:
+        audio = self.get_audio()
+        if audio.size == 0:
+            return audio
+        max_samples = max(1, int(seconds * self.sample_rate))
+        if len(audio) <= max_samples:
+            return audio
+        return audio[-max_samples:]
+
     def duration_s(self) -> float:
         return len(self.get_audio()) / self.sample_rate

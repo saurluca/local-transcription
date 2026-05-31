@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import argparse
-import sys
 from pathlib import Path
 
 from local_transcription.daemon import DictationDaemon, send_command
 from local_transcription.log import get_logger, setup_logging
-from local_transcription.models import default_model_dir, download_model
+from local_transcription.models import (
+    DEFAULT_MODEL,
+    default_model_dir,
+    download_model,
+    model_storage_dir_name,
+)
 
 log = get_logger("cli")
 
@@ -24,14 +28,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
-    daemon = sub.add_parser("daemon", help="Run the dictation daemon (loads the model once on GPU).")
+    daemon = sub.add_parser(
+        "daemon", help="Run the dictation daemon (loads the model once on GPU)."
+    )
     daemon.add_argument(
         "--language",
         choices=["auto", "de", "en"],
         default=None,
         help="Whisper language (default: LT_LANGUAGE or auto).",
     )
-    sub.add_parser("toggle", help="Start/stop recording and type into the active field.")
+    sub.add_parser(
+        "toggle", help="Start/stop recording and type into the active field."
+    )
     sub.add_parser("start", help="Start recording.")
     sub.add_parser("stop", help="Stop recording and insert the final transcript.")
     sub.add_parser("status", help="Show daemon state.")
@@ -43,14 +51,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     download.add_argument(
         "--model",
-        default="openai/whisper-small",
-        help="Hugging Face model id (default: openai/whisper-small).",
+        default=DEFAULT_MODEL,
+        help=f"Hugging Face model id (default: {DEFAULT_MODEL}).",
     )
     download.add_argument(
         "--output",
         type=Path,
         default=None,
-        help="Output directory (default: ~/.local/share/local-transcription/models/whisper-small).",
+        help="Output directory (default: ~/.local/share/local-transcription/models/<model>).",
     )
     return parser
 
@@ -65,7 +73,6 @@ def main(argv: list[str] | None = None) -> int:
     setup_logging()
 
     log.info("Command: %s", args.command)
-
     if args.command == "daemon":
         if getattr(args, "language", None) is not None:
             import os
@@ -75,7 +82,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "download-model":
         try:
-            output = args.output or default_model_dir(args.model.split("/")[-1])
+            output = args.output or default_model_dir(
+                model_storage_dir_name(args.model)
+            )
             log.info("Output directory: %s", output)
             download_model(args.model, output)
         except RuntimeError as exc:
