@@ -12,6 +12,7 @@ uv run local-transcription download-model
 uv run local-transcription download-model --model openai/whisper-turbo
 
 # Run the daemon (loads the model once)
+uv sync --extra overlay   # once: recording indicator (PyGObject in uv venv)
 uv run local-transcription daemon
 
 # In another terminal or Hyprland keybind
@@ -28,7 +29,9 @@ bind = SUPER, V, exec, uv run local-transcription toggle
 
 Each recording session types at the **focused cursor**. Text from earlier sessions is **not** removed; new dictation is inserted at the cursor. If you finished a previous dictation and start another with the cursor at the end of that text, a space is inserted before the new text when `LT_APPEND_SPACE=1` (default).
 
-While recording, nothing is typed yet. When you stop, the full audio is transcribed once and the complete text is inserted in a single step.
+While recording, a small floating indicator appears at the bottom center of the screen (Wayland layer-shell overlay). When you stop, it turns orange while transcription runs, then disappears.
+
+When you stop, the full audio is transcribed once and the complete text is inserted in a single step.
 
 ## Language (German / English)
 
@@ -63,8 +66,10 @@ uv run local-transcription daemon --language en
 | `LT_TYPING_BACKEND` | `auto` | `clipboard` (preferred), `wtype`, `dotool`, or `ydotool`. `auto` tries `clipboard` first |
 | `LT_PASTE_DELAY_MS` | `120` | Delay before sending Ctrl+V so focus settles (clipboard backend) |
 | `LT_CLIPBOARD_RESTORE` | `1` | Restore previous clipboard content after pasting (`0` to disable) |
+| `LT_OVERLAY` | `1` | Floating recording indicator (bottom center, gtk-layer-shell) |
+| `LT_OVERLAY_MARGIN` | `32` | Distance from bottom screen edge in pixels |
 | `LT_LOG_LEVEL` | `INFO` | `DEBUG` for verbose logs |
-| `LT_NOTIFY` | `1` | Desktop notifications via `notify-send` (`0` to disable) |
+| `LT_NOTIFY` | `0` | Desktop notifications via `notify-send` (`1` to enable) |
 
 ## Troubleshooting
 
@@ -72,6 +77,17 @@ uv run local-transcription daemon --language en
 - **Wrong or garbled text** — Check cursor focus and window; try forcing `LT_LANGUAGE=de` or `en`.
 - **Missing spaces / lost focus / text in the wrong place (browsers, Cursor, Electron apps)** — Caused by per-character key injection (`wtype`) being throttled by Chromium/Electron. The default `clipboard` backend (atomic Ctrl+V) fixes this. If it still misbehaves, increase `LT_PASTE_DELAY_MS` (e.g. `200`).
 - **Nothing pastes in a terminal** — Some terminals use `Ctrl+Shift+V` instead of `Ctrl+V`. Use a keystroke backend there (`LT_TYPING_BACKEND=wtype`) or enable the terminal's `Ctrl+V` paste.
+- **No recording indicator** — The uv venv is isolated from system Python; install overlay deps once:
+
+  ```bash
+  # Manjaro system libraries
+  sudo pacman -S gtk3 gtk-layer-shell gobject-introspection libgirepository cairo pkgconf
+
+  # PyGObject into the uv venv (matches Python 3.12)
+  uv sync --extra overlay
+  ```
+
+  Set `LT_OVERLAY=0` to disable. Without PyGObject the daemon still runs, just without the dot.
 - **Poor DE/EN quality** — Default is [Whisper turbo](https://github.com/openai/whisper) (`large-v3-turbo`, ~809M params). For even higher accuracy try `openai/whisper-medium` or force `LT_LANGUAGE=de` / `en`.
 - **GPU crash / "Not Implemented"** — Intel Arc does not support `num_beams>1` on GPU. Default is `LT_NUM_BEAMS=1`. The transcriber retries automatically with beams=1 if needed.
 - **Daemon already running** — `uv run local-transcription shutdown` or remove stale PID under `$XDG_RUNTIME_DIR/local-transcription.pid`.

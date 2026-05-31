@@ -8,6 +8,7 @@ import time
 
 from local_transcription.config import SETTINGS, Settings, normalize_language
 from local_transcription.log import get_logger
+from local_transcription.overlay import OverlayBackend, OverlayState, create_overlay
 from local_transcription.recorder import AudioRecorder
 from local_transcription.transcriber import Transcriber
 from local_transcription.typer import DictationTyper, create_output
@@ -16,8 +17,9 @@ log = get_logger("daemon")
 
 
 class DictationSession:
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, overlay: OverlayBackend) -> None:
         self._settings = settings
+        self._overlay = overlay
         self._lock = threading.Lock()
         self._state = "idle"
         log.info("Initializing dictation session")
@@ -110,6 +112,7 @@ class DictationSession:
                 return
             self._recorder.start()
             self._state = "recording"
+            self._set_overlay("recording")
             self._notify("Dictation started")
 
         log.info("Dictation recording active — speak now")
@@ -120,6 +123,8 @@ class DictationSession:
                 log.debug("Stop ignored, state=%s", self._state)
                 return
             self._state = "stopping"
+
+        self._set_overlay("stopping")
 
         try:
             log.info("Stopping dictation ...")
@@ -144,12 +149,15 @@ class DictationSession:
         finally:
             with self._lock:
                 self._state = "idle"
+            self._set_overlay("hidden")
             self._notify("Dictation stopped")
             log.info("Dictation idle")
 
-    @staticmethod
-    def _notify(message: str) -> None:
-        if os.environ.get("LT_NOTIFY", "1") == "0":
+    def _set_overlay(self, state: OverlayState) -> None:
+        self._overlay.set_state(state)
+
+    def _notify(self, message: str) -> None:
+        if not self._settings.notify:
             return
         try:
             import subprocess
@@ -168,6 +176,7 @@ class DictationDaemon:
     def __init__(self, settings: Settings = SETTINGS) -> None:
         self._settings = settings
         self._session: DictationSession | None = None
+        self._overlay: OverlayBackend | None = None
         self._server: socket.socket | None = None
         self._running = False
 
@@ -190,8 +199,12 @@ class DictationDaemon:
             return 1
 
         log.info("Loading speech model (this may take a while on first run) ...")
+        self._overlay = create_overlay(
+            enabled=self._settings.overlay,
+            margin_bottom=self._settings.overlay_margin_bottom,
+        )
         started = time.perf_counter()
-        self._session = DictationSession(self._settings)
+        self._session = DictationSession(self._settings, self._overlay)
         log.info("Startup completed in %.1fs", time.perf_counter() - started)
 
         if self._settings.socket_path.exists():
@@ -250,6 +263,9 @@ class DictationDaemon:
         log.info("Cleaning up daemon")
         if self._session and self._session.state == "recording":
             self._session.stop()
+        if self._overlay:
+            self._overlay.stop()
+            self._overlay = None
         if self._settings.socket_path.exists():
             self._settings.socket_path.unlink()
         if self._settings.pid_path.exists():

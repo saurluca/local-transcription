@@ -10,6 +10,9 @@ dependencies = [
     "huggingface-hub>=0.20.0",
 ]
 
+[project.optional-dependencies]
+overlay = ["PyGObject>=3.42.0"]
+
 [project.scripts]
 local-transcription = "local_transcription.cli:main"
 
