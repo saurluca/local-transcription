@@ -36,10 +36,12 @@ class WtypeOutput(TextOutput):
     def delete_chars(self, count: int) -> bool:
         if count <= 0:
             return True
+        # Batch all backspaces into a single wtype invocation. Spawning one
+        # process per char is what made deletion feel sluggish.
+        args = ["wtype"]
         for _ in range(count):
-            if subprocess.run(["wtype", "-k", "BackSpace"], check=False).returncode != 0:
-                return False
-        return True
+            args += ["-k", "BackSpace"]
+        return subprocess.run(args, check=False).returncode == 0
 
 
 class DotoolOutput(TextOutput):
@@ -78,11 +80,12 @@ class YdotoolOutput(TextOutput):
     def delete_chars(self, count: int) -> bool:
         if count <= 0:
             return True
-        # KEY_BACKSPACE = 14
+        # KEY_BACKSPACE = 14. Send all press/release pairs in one call instead
+        # of spawning a process per backspace.
+        args = ["ydotool", "key"]
         for _ in range(count):
-            if subprocess.run(["ydotool", "key", "14:1", "14:0"], check=False).returncode != 0:
-                return False
-        return True
+            args += ["14:1", "14:0"]
+        return subprocess.run(args, check=False).returncode == 0
 
 
 class ClipboardOutput(TextOutput):
