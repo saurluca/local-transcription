@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 import openvino_genai as ov_genai
 
+from local_transcription.config import normalize_language
 from local_transcription.log import get_logger
 from local_transcription.models import resolve_model_dir
 
@@ -19,8 +20,8 @@ log = get_logger("transcriber")
 
 
 def resolve_language_token(language: str) -> str | None:
-    code = language.strip().lower()
-    if code in ("auto", "", "none"):
+    code = normalize_language(language)
+    if code == "auto":
         return None
     return f"<|{code}|>"
 
@@ -51,7 +52,9 @@ class Transcriber:
         self._final_pipe: ov_genai.WhisperPipeline | None = None
         self._final_pipe_config: ov_genai.WhisperGenerationConfig | None = None
 
-        self._fast_config = self._build_config(self._pipe, fast=True, num_beams=num_beams)
+        self._fast_config = self._build_config(
+            self._pipe, fast=True, num_beams=num_beams
+        )
         self._final_config = self._build_config(
             self._pipe, fast=False, num_beams=final_num_beams
         )
@@ -80,21 +83,29 @@ class Transcriber:
             ov_config["CACHE_DIR"] = str(cache_dir)
             log.info("OpenVINO compile cache: %s", cache_dir)
 
-        log.info("Loading WhisperPipeline from %s on device=%s", self._model_path, device)
+        log.info(
+            "Loading WhisperPipeline from %s on device=%s", self._model_path, device
+        )
         if "GPU" in device.upper():
-            log.info("First GPU load can take 30-60s while the model compiles for Intel Arc")
+            log.info(
+                "First GPU load can take 30-60s while the model compiles for Intel Arc"
+            )
 
         started = time.perf_counter()
         try:
             pipe = ov_genai.WhisperPipeline(str(self._model_path), device, **ov_config)
-            log.info("Pipeline loaded on %s in %.1fs", device, time.perf_counter() - started)
+            log.info(
+                "Pipeline loaded on %s in %.1fs", device, time.perf_counter() - started
+            )
             return pipe
         except Exception as exc:
             if device.upper() != "CPU":
                 log.warning("%s init failed (%s), falling back to CPU", device, exc)
                 started = time.perf_counter()
                 pipe = ov_genai.WhisperPipeline(str(self._model_path), "CPU")
-                log.info("Pipeline loaded on CPU in %.1fs", time.perf_counter() - started)
+                log.info(
+                    "Pipeline loaded on CPU in %.1fs", time.perf_counter() - started
+                )
                 return pipe
             log.exception("Failed to load WhisperPipeline")
             raise
@@ -128,7 +139,9 @@ class Transcriber:
         )
         return config
 
-    def _ensure_quality_final_pipe(self) -> tuple[ov_genai.WhisperPipeline, ov_genai.WhisperGenerationConfig]:
+    def _ensure_quality_final_pipe(
+        self,
+    ) -> tuple[ov_genai.WhisperPipeline, ov_genai.WhisperGenerationConfig]:
         if self._final_pipe is not None and self._final_pipe_config is not None:
             return self._final_pipe, self._final_pipe_config
 
@@ -166,7 +179,9 @@ class Transcriber:
         except RuntimeError as exc:
             if beams <= 1 or "not implemented" not in str(exc).lower():
                 raise
-            log.warning("num_beams=%d not supported (%s), retrying with num_beams=1", beams, exc)
+            log.warning(
+                "num_beams=%d not supported (%s), retrying with num_beams=1", beams, exc
+            )
             retry_config = copy.copy(config)
             if hasattr(retry_config, "num_beams"):
                 retry_config.num_beams = 1

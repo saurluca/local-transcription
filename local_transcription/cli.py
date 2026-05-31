@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from local_transcription.config import ALLOWED_LANGUAGES, normalize_language
 from local_transcription.daemon import DictationDaemon, send_command
 from local_transcription.log import get_logger, setup_logging
 from local_transcription.models import (
@@ -33,9 +34,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     daemon.add_argument(
         "--language",
-        choices=["auto", "de", "en"],
+        choices=sorted(ALLOWED_LANGUAGES),
         default=None,
-        help="Whisper language (default: LT_LANGUAGE or auto).",
+        help="German/English only: auto, de, or en (default: LT_LANGUAGE or auto).",
     )
     sub.add_parser(
         "toggle", help="Start/stop recording and type into the active field."
@@ -74,10 +75,15 @@ def main(argv: list[str] | None = None) -> int:
 
     log.info("Command: %s", args.command)
     if args.command == "daemon":
-        if getattr(args, "language", None) is not None:
-            import os
+        import os
 
+        if getattr(args, "language", None) is not None:
             os.environ["LT_LANGUAGE"] = args.language
+        try:
+            normalize_language(os.environ.get("LT_LANGUAGE", "auto"))
+        except ValueError as exc:
+            log.error("%s", exc)
+            return 1
         return DictationDaemon().run()
 
     if args.command == "download-model":

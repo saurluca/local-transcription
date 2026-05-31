@@ -8,7 +8,7 @@ import time
 
 import numpy as np
 
-from local_transcription.config import SETTINGS, Settings
+from local_transcription.config import SETTINGS, Settings, normalize_language
 from local_transcription.log import get_logger
 from local_transcription.recorder import AudioRecorder
 from local_transcription.transcriber import Transcriber
@@ -24,13 +24,14 @@ class DictationSession:
         self._state = "idle"
         log.info("Initializing dictation session")
         log.info("Model dir: %s", settings.model_dir)
-        log.info("Device: %s, language: %s", settings.device, settings.language)
+        language = normalize_language(settings.language)
+        log.info("Device: %s, language: %s", settings.device, language)
 
         self._recorder = AudioRecorder(settings.sample_rate)
         self._transcriber = Transcriber(
             model_dir=settings.model_dir,
             device=settings.device,
-            language=settings.language,
+            language=language,
             num_beams=settings.num_beams,
             final_num_beams=settings.final_num_beams,
             final_device=settings.final_device,
@@ -337,6 +338,14 @@ class DictationDaemon:
             return 1
 
         self._write_pid()
+        try:
+            normalize_language(self._settings.language)
+        except ValueError as exc:
+            log.error("%s", exc)
+            if self._settings.pid_path.exists():
+                self._settings.pid_path.unlink(missing_ok=True)
+            return 1
+
         log.info("Loading speech model (this may take a while on first run) ...")
         started = time.perf_counter()
         self._session = DictationSession(self._settings)
