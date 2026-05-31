@@ -29,7 +29,7 @@ bind = SUPER, V, exec, uv run local-transcription toggle
 
 Each recording session types at the **focused cursor**. Text from earlier sessions is **not** removed; new dictation is inserted at the cursor. If you finished a previous dictation and start another with the cursor at the end of that text, a space is inserted before the new text when `LT_APPEND_SPACE=1` (default).
 
-While recording, a small floating indicator appears at the bottom center of the screen (Wayland layer-shell overlay). When you stop, it turns orange while transcription runs, then disappears.
+While recording, a small floating indicator appears at the bottom center of the screen (Wayland layer-shell overlay): **Recording ●** (red, pulsing). When you stop, it switches to **Transcribing ●** (orange) while Whisper runs, then disappears.
 
 When you stop, the full audio is transcribed once and the complete text is inserted in a single step.
 

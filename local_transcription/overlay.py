@@ -116,6 +116,14 @@ class DictationOverlay:
         #dictation-indicator-box.stopping #dictation-indicator-dot {
             color: #ffaa44;
         }
+        #dictation-indicator-label {
+            color: #eeeeee;
+            font-size: 13px;
+            font-weight: 600;
+        }
+        #dictation-indicator-box.stopping #dictation-indicator-label {
+            color: #ffcc88;
+        }
         #dictation-indicator-dot {
             font-size: 20px;
             font-weight: bold;
@@ -148,8 +156,11 @@ class DictationOverlay:
 
         box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         box.set_name("dictation-indicator-box")
+        label = Gtk.Label(label="")
+        label.set_name("dictation-indicator-label")
         dot = Gtk.Label(label="●")
         dot.set_name("dictation-indicator-dot")
+        box.pack_start(label, False, False, 0)
         box.pack_start(dot, False, False, 0)
         window.add(box)
 
@@ -187,9 +198,11 @@ class DictationOverlay:
 
             window.show_all()
             if state == "recording":
+                label.set_text("Recording")
                 style.add_class("recording")
                 start_pulse()
             else:
+                label.set_text("Transcribing")
                 style.add_class("stopping")
                 stop_pulse()
                 dot.set_opacity(0.85)
