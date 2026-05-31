@@ -8,3 +8,8 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Local models and OpenVINO compile cache
+models/
+openvino-cache/
+whisper_cache/

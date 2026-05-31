@@ -1,6 +1,4 @@
-def main():
-    print("Hello from local-transcription!")
-
+from local_transcription.cli import main
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
