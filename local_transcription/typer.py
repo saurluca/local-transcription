@@ -92,14 +92,19 @@ class ClipboardOutput(TextOutput):
             return None
         try:
             result = subprocess.run(
-                ["wl-paste", "--no-newline"],
+                ["wl-paste", "--no-newline", "--type", "text"],
                 capture_output=True,
-                text=True,
                 check=False,
             )
         except OSError:
             return None
-        return result.stdout if result.returncode == 0 else None
+        if result.returncode != 0:
+            return None
+        try:
+            return result.stdout.decode("utf-8")
+        except UnicodeDecodeError:
+            log.debug("clipboard snapshot is not UTF-8 text; skipping restore")
+            return None
 
     def type_text(self, text: str) -> bool:
         if not text:
