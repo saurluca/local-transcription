@@ -1,115 +1,232 @@
 # local-transcription
 
-Offline push-to-talk dictation with OpenVINO Whisper (Intel CPU/GPU/NPU). Inserts text into the focused application via clipboard paste (`Ctrl+V`, or `Ctrl+Shift+V` in terminals such as Alacritty) by default, with `wtype`, `dotool`, or `ydotool` as keystroke-injection fallbacks. Terminal detection uses Hyprland (`hyprctl activewindow`).
+**Offline push-to-talk dictation for Linux.** Hold a hotkey, speak, release — your words appear at the cursor. No cloud, no subscription, no account. Whisper runs locally on your Intel GPU (or CPU/NPU) via OpenVINO, and text lands in whatever app you're focused on: browser, terminal, editor, chat.
+
+Built for Wayland + Hyprland. Fast enough to feel instant. Private enough to dictate passwords.
+
+---
+
+## Why you'll like it
+
+- **100% offline** — audio never leaves your machine
+- **GPU-accelerated** — OpenVINO Whisper on Intel Arc / iGPU / NPU; model loads once, stays resident
+- **Push-to-talk workflow** — one key toggles record/stop; text pastes where you're already typing
+- **Pipelined sessions** — stop dictating and immediately start the next clip while the previous one is still transcribing; no waiting around
+- **Smart paste** — clipboard + `Ctrl+V` by default; `Ctrl+Shift+V` in terminals (Alacritty, kitty, foot, …)
+- **Visual feedback** — optional floating indicator: red pulse while recording, orange while transcribing
+- **German & English** — auto-detect per clip, or force `de` / `en`
+
+If you've used cloud dictation and hated the lag, the privacy policy, or the "why did it paste that in the wrong window" moments — this is the opposite.
+
+---
+
+## How it works
+
+```
+Hyprland keybind  →  CLI (toggle)  →  Unix socket  →  Daemon
+                                                        ├─ AudioRecorder (sounddevice)
+                                                        ├─ Whisper via OpenVINO (GPU)
+                                                        └─ Clipboard paste → focused window
+```
+
+1. You run a **daemon** once at login. It loads the Whisper model into memory (~30–60s first start, then instant).
+2. Your hotkey sends `local-transcription toggle` over a Unix socket — no model reload per press.
+3. **Press once** → microphone records. **Press again** → recording stops, audio is queued for transcription.
+4. A background worker transcribes and pastes the text at your cursor. **You can press again right away** to record the next sentence while the last one is still processing.
+5. Clips are processed in order, so pasted text always appears in the sequence you spoke.
+
+```mermaid
+sequenceDiagram
+    participant You
+    participant Daemon
+    participant Whisper
+    participant App as Focused app
+
+    You->>Daemon: toggle (start)
+    Note over Daemon: Recording ●
+    You->>Daemon: toggle (stop)
+    Daemon->>Whisper: queue audio (async)
+    Note over Daemon: ready for next clip
+    You->>Daemon: toggle (start again)
+    Whisper->>App: paste clip 1
+    You->>Daemon: toggle (stop)
+    Whisper->>App: paste clip 2
+```
+
+---
 
 ## Quick start
 
+**Requirements:** Linux, Wayland, Python 3.12+, [uv](https://docs.astral.sh/uv/), `wl-copy` + `wtype` (or `ydotool` / `dotool` as fallbacks). Intel GPU recommended; CPU works too.
+
 ```bash
-# One-time: download the OpenVINO Whisper turbo model (~1.6 GB)
+git clone https://github.com/saurluca/local-transcription.git
+cd local-transcription
+
+# One-time: download OpenVINO Whisper turbo (~1.6 GB)
 uv run local-transcription download-model
 
-# Or explicitly:
-uv run local-transcription download-model --model openai/whisper-turbo
+# Optional: floating recording indicator (needs system GTK libs + PyGObject)
+uv sync --extra overlay
 
-# Run the daemon (loads the model once)
-uv sync --extra overlay   # once: recording indicator (PyGObject in uv venv)
+# Start the daemon (keep this running)
 uv run local-transcription daemon
-
-# In another terminal or Hyprland keybind
-uv run local-transcription toggle   # start/stop recording
 ```
 
-Hyprland example:
+**Hyprland keybind** — add to `hyprland.conf`:
 
 ```
 bind = SUPER, V, exec, uv run local-transcription toggle
 ```
 
-## How typing works
+Press `SUPER+V` to start recording, press again to stop and transcribe. Keep talking — you don't have to wait for paste to finish before the next clip.
 
-Each recording session types at the **focused cursor**. Text from earlier sessions is **not** removed; new dictation is inserted at the cursor. If you finished a previous dictation and start another with the cursor at the end of that text, a space is inserted before the new text when `LT_APPEND_SPACE=1` (default).
-
-While recording, a small floating indicator appears at the bottom center of the screen (Wayland layer-shell overlay): **Recording ●** (red, pulsing). When you stop, it switches to **Transcribing ●** (orange) while Whisper runs, then disappears.
-
-When you stop, the full audio is transcribed once and the complete text is inserted in a single step. With the default `clipboard` backend, the daemon copies to the clipboard and sends a paste shortcut: `Ctrl+Shift+V` when the focused window class matches `LT_TERMINAL_CLASSES` (e.g. Alacritty), otherwise `Ctrl+V`.
-
-## Language (German / English)
-
-Default is automatic detection per recording:
+Manual control from a terminal:
 
 ```bash
-LT_LANGUAGE=auto uv run local-transcription daemon
-# or
-uv run local-transcription daemon --language auto
+uv run local-transcription toggle   # start / stop
+uv run local-transcription status   # IDLE | RECORDING | TRANSCRIBING
+uv run local-transcription shutdown
 ```
 
-Force a language:
+---
+
+## Daily usage
+
+| Action | What happens |
+|--------|----------------|
+| First press | Mic on — speak naturally |
+| Second press | Mic off — transcription queued, paste follows shortly |
+| Third press (anytime) | Start a new recording, even if the last clip is still transcribing |
+| Cursor placement | Text always inserts at the **current** cursor; move it before dictating |
+
+**Spacing between sessions:** with `LT_APPEND_SPACE=1` (default), a leading space is added before the next dictation when you continue from where you left off — handy for flowing prose.
+
+**Languages:** default `auto` detects German or English per recording. Force one language if auto gets it wrong:
 
 ```bash
 LT_LANGUAGE=de uv run local-transcription daemon
-uv run local-transcription daemon --language en
+# or: uv run local-transcription daemon --language en
 ```
 
-`auto` picks German or English (and other Whisper languages) per utterance. Mixed DE+EN in a **single** sentence is a known Whisper limitation; switch languages between recordings instead.
+Mixed DE+EN in a **single** sentence is a known Whisper limitation; switch languages between clips instead.
 
-## Environment variables
+---
+
+## Typing & paste behavior
+
+The default **`clipboard`** backend is the reliable choice for browsers, Electron apps (VS Code, Cursor, Slack), and anything that drops keystrokes from character-by-character injection.
+
+1. Snapshot your clipboard (optional restore after paste)
+2. Copy transcript via `wl-copy`
+3. Send paste chord to the focused window:
+   - **`Ctrl+Shift+V`** in terminal window classes (`Alacritty`, `kitty`, `foot`, …)
+   - **`Ctrl+V`** everywhere else
+
+Terminal detection uses Hyprland (`hyprctl activewindow`). Check your window class with `hyprctl activewindow -j` and add it to `LT_TERMINAL_CLASSES` if paste fails in a terminal.
+
+Fallback backends: `wtype`, `dotool`, `ydotool` — set via `LT_TYPING_BACKEND`.
+
+---
+
+## Overlay indicator
+
+When enabled (`LT_OVERLAY=1`, default), a small pill appears bottom-center:
+
+| State | Indicator |
+|-------|-----------|
+| Recording | **Recording ●** — red, pulsing |
+| Transcribing (background jobs) | **Transcribing ●** — orange |
+| Idle | hidden |
+
+If you're recording a new clip while a previous one transcribes, recording takes visual priority.
+
+Install overlay deps once (example: Manjaro/Arch):
+
+```bash
+sudo pacman -S gtk3 gtk-layer-shell gobject-introspection libgirepository cairo pkgconf
+uv sync --extra overlay
+```
+
+Set `LT_OVERLAY=0` to disable. The daemon works fine without it.
+
+---
+
+## Configuration
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `LT_LANGUAGE` | `auto` | `auto`, `de`, or `en` |
-| `LT_DEVICE` | `GPU` | OpenVINO device (`GPU`, `CPU`, `NPU`) |
-| `LT_HF_MODEL` | `openai/whisper-turbo` | Model id for `download-model` (also `openai/whisper-small`, `openai/whisper-medium`, …) |
-| `LT_MODEL_DIR` | `~/.local/share/.../whisper-turbo` | Path to converted OpenVINO model |
-| `LT_NUM_BEAMS` | `1` | Beam search width for transcription |
-| `LT_STOPPING_WAIT` | `15` | Seconds to wait when toggling during an in-progress stop |
-| `LT_APPEND_SPACE` | `1` | Leading space before next session after a successful dictation |
-| `LT_TYPING_BACKEND` | `auto` | `clipboard` (preferred), `wtype`, `dotool`, or `ydotool`. `auto` tries `clipboard` first |
-| `LT_PASTE_DELAY_MS` | `120` | Delay before sending the paste shortcut so focus settles (clipboard backend) |
-| `LT_CLIPBOARD_RESTORE` | `1` | Restore previous clipboard content after pasting (`0` to disable) |
-| `LT_TERMINAL_CLASSES` | `Alacritty,kitty,foot,…` | Comma-separated Hyprland window classes that get `Ctrl+Shift+V` paste. Empty string disables terminal detection (always `Ctrl+V`). Check class with `hyprctl activewindow -j` |
-| `LT_OVERLAY` | `1` | Floating recording indicator (bottom center, gtk-layer-shell) |
-| `LT_OVERLAY_MARGIN` | `32` | Distance from bottom screen edge in pixels |
-| `LT_LOG_LEVEL` | `INFO` | `DEBUG` for verbose logs |
-| `LT_NOTIFY` | `0` | Desktop notifications via `notify-send` (`1` to enable) |
+| `LT_DEVICE` | `GPU` | OpenVINO device: `GPU`, `CPU`, `NPU` |
+| `LT_HF_MODEL` | `openai/whisper-turbo` | Model for `download-model` |
+| `LT_MODEL_DIR` | `~/.local/share/.../whisper-turbo` | Path to converted OpenVINO weights |
+| `LT_NUM_BEAMS` | `1` | Beam search width (keep at `1` on Intel Arc GPU) |
+| `LT_APPEND_SPACE` | `1` | Leading space before next session after successful dictation |
+| `LT_TYPING_BACKEND` | `auto` | `clipboard`, `wtype`, `dotool`, or `ydotool` |
+| `LT_PASTE_DELAY_MS` | `120` | Delay before paste shortcut (ms) |
+| `LT_CLIPBOARD_RESTORE` | `1` | Restore clipboard after paste (`0` to disable) |
+| `LT_TERMINAL_CLASSES` | `Alacritty,kitty,foot,…` | Window classes that get `Ctrl+Shift+V`; empty string = always `Ctrl+V` |
+| `LT_OVERLAY` | `1` | Floating recording indicator |
+| `LT_OVERLAY_MARGIN` | `32` | Distance from bottom edge (px) |
+| `LT_LOG_LEVEL` | `INFO` | Set to `DEBUG` for verbose logs |
+| `LT_NOTIFY` | `0` | Desktop notifications via `notify-send |
 
-## Troubleshooting
+`LT_STOPPING_WAIT` is legacy and no longer used — pipelined transcription removed the need to wait between sessions.
 
-- **Old text appears before new dictation** — Expected when appending at the cursor: place the cursor where you want new text. Previous dictation stays to the left.
-- **Wrong or garbled text** — Check cursor focus and window; try forcing `LT_LANGUAGE=de` or `en`.
-- **Missing spaces / lost focus / text in the wrong place (browsers, Cursor, Electron apps)** — Caused by per-character key injection (`wtype`) being throttled by Chromium/Electron. The default `clipboard` backend (atomic Ctrl+V) fixes this. If it still misbehaves, increase `LT_PASTE_DELAY_MS` (e.g. `200`).
-- **Nothing pastes in a terminal** — The `clipboard` backend sends `Ctrl+Shift+V` for classes in `LT_TERMINAL_CLASSES` (Alacritty is included by default). Confirm the window class with `hyprctl activewindow -j` and add it to the list if needed. Set `LT_LOG_LEVEL=DEBUG` to see which paste chord was used. If `hyprctl` is unavailable, paste falls back to `Ctrl+V`. Set `LT_TERMINAL_CLASSES=""` to disable terminal detection.
-- **No recording indicator** — The uv venv is isolated from system Python; install overlay deps once:
+---
 
-  ```bash
-  # Manjaro system libraries
-  sudo pacman -S gtk3 gtk-layer-shell gobject-introspection libgirepository cairo pkgconf
-
-  # PyGObject into the uv venv (matches Python 3.12)
-  uv sync --extra overlay
-  ```
-
-  Set `LT_OVERLAY=0` to disable. Without PyGObject the daemon still runs, just without the dot.
-- **Poor DE/EN quality** — Default is [Whisper turbo](https://github.com/openai/whisper) (`large-v3-turbo`, ~809M params). For even higher accuracy try `openai/whisper-medium` or force `LT_LANGUAGE=de` / `en`.
-- **GPU crash / "Not Implemented"** — Intel Arc does not support `num_beams>1` on GPU. Default is `LT_NUM_BEAMS=1`. The transcriber retries automatically with beams=1 if needed.
-- **Daemon already running** — `uv run local-transcription shutdown` or remove stale PID under `$XDG_RUNTIME_DIR/local-transcription.pid`.
-
-## Commands
-
-| Command | Description |
-|---------|-------------|
-| `daemon` | Start the dictation server |
-| `toggle` / `start` / `stop` | Control recording |
-| `status` | `IDLE` or `RECORDING` |
-| `shutdown` | Stop the daemon |
-| `download-model` | Fetch OpenVINO Whisper weights (default: turbo) |
-
-### Supported models
+## Models
 
 Pre-converted OpenVINO models from [OpenVINO on Hugging Face](https://huggingface.co/OpenVINO):
 
 | CLI `--model` | OpenVINO repo | Notes |
 |---------------|---------------|-------|
-| `openai/whisper-turbo` (default) | `whisper-large-v3-turbo-fp16-ov` | Best speed/quality tradeoff (~8× faster than large) |
-| `openai/whisper-small` | `whisper-small-fp16-ov` | Lighter, lower VRAM |
+| `openai/whisper-turbo` **(default)** | `whisper-large-v3-turbo-fp16-ov` | Best speed/quality tradeoff |
 | `openai/whisper-medium` | `whisper-medium-fp16-ov` | Higher accuracy, slower |
+| `openai/whisper-small` | `whisper-small-fp16-ov` | Lighter, less VRAM |
 | `openai/whisper-tiny` / `base` | … | Fastest, least accurate |
+
+```bash
+uv run local-transcription download-model --model openai/whisper-medium
+```
+
+---
+
+## Commands
+
+| Command | Description |
+|---------|-------------|
+| `daemon` | Start the dictation server (loads model once) |
+| `toggle` | Start/stop recording |
+| `start` / `stop` | Explicit record control |
+| `status` | `IDLE`, `RECORDING`, or `TRANSCRIBING` |
+| `shutdown` | Stop daemon (finishes pending transcriptions first) |
+| `download-model` | Fetch OpenVINO Whisper weights |
+
+---
+
+## Troubleshooting
+
+**Old text appears before new dictation** — Expected when appending at the cursor. Place the cursor where you want new text; previous dictation stays to the left.
+
+**Wrong or garbled text** — Check focus and window; try `LT_LANGUAGE=de` or `en`.
+
+**Nothing pastes / text in wrong place (browsers, Cursor, Electron)** — Use the default `clipboard` backend. Increase `LT_PASTE_DELAY_MS` (e.g. `200`) if focus is slow to settle.
+
+**Nothing pastes in a terminal** — Add your terminal's window class to `LT_TERMINAL_CLASSES`. Run `hyprctl activewindow -j` to find it. Set `LT_LOG_LEVEL=DEBUG` to see which paste chord was sent.
+
+**No recording indicator** — Install GTK + `uv sync --extra overlay`, or set `LT_OVERLAY=0`.
+
+**GPU crash / "Not Implemented"** — Intel Arc doesn't support `num_beams>1` on GPU. Keep `LT_NUM_BEAMS=1`.
+
+**Daemon already running** — `uv run local-transcription shutdown`, or remove stale PID at `$XDG_RUNTIME_DIR/local-transcription.pid`.
+
+---
+
+## Stack
+
+Python 3.12 · [uv](https://docs.astral.sh/uv/) · [OpenVINO GenAI](https://docs.openvino.ai/) · Whisper · sounddevice · Wayland (`wl-copy`, `wtype`) · optional GTK layer-shell overlay
+
+---
+
+*Speak. Stop. Keep speaking. Your GPU handles the rest.*
