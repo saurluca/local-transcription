@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 import os
+import queue
 import signal
 import socket
+import subprocess
 import threading
 import time
+
+import numpy as np
+from numpy.typing import NDArray
 
 from local_transcription.config import SETTINGS, Settings, normalize_language
 from local_transcription.log import get_logger
@@ -15,6 +20,8 @@ from local_transcription.typer import DictationTyper, create_output
 
 log = get_logger("daemon")
 
+_SHUTDOWN_DRAIN_TIMEOUT_S = 120.0
+
 
 class DictationSession:
     def __init__(self, settings: Settings, overlay: OverlayBackend) -> None:
@@ -22,6 +29,8 @@ class DictationSession:
         self._overlay = overlay
         self._lock = threading.Lock()
         self._state = "idle"
+        self._pending = 0
+        self._jobs: queue.Queue[NDArray[np.float32] | None] = queue.Queue()
         log.info("Initializing dictation session")
         log.info("Model dir: %s", settings.model_dir)
         language = normalize_language(settings.language)
@@ -44,6 +53,12 @@ class DictationSession:
             append_space=settings.append_space,
         )
         log.info("Typing backend: %s", self._typer.backend)
+        self._worker = threading.Thread(
+            target=self._worker_loop,
+            name="dictation-worker",
+            daemon=True,
+        )
+        self._worker.start()
         log.info("Session ready")
 
     @property
@@ -51,71 +66,55 @@ class DictationSession:
         with self._lock:
             return self._state
 
-    def _wait_for_idle(self, timeout: float | None = None) -> bool:
-        deadline = time.monotonic() + (timeout if timeout is not None else self._settings.stopping_wait_timeout_s)
-        while time.monotonic() < deadline:
-            if self.state == "idle":
-                return True
-            time.sleep(0.05)
-        return self.state == "idle"
+    def _status_response(self) -> str:
+        with self._lock:
+            if self._state == "recording":
+                return "RECORDING"
+            if self._pending > 0:
+                return "TRANSCRIBING"
+            return "IDLE"
 
     def handle(self, command: str) -> str:
         command = command.strip().lower()
-        log.info("Received command: %s (state=%s)", command, self.state)
+        log.info("Received command: %s (state=%s)", command, self._status_response())
 
         if command == "status":
-            return self.state.upper()
+            return self._status_response()
         if command == "toggle":
-            if self.state == "stopping":
-                if not self._wait_for_idle():
-                    return "STOPPING"
             if self.state == "recording":
                 self.stop()
-                return "IDLE"
+                return "TRANSCRIBING"
             self.start()
             return "RECORDING"
         if command == "start":
             if self.state == "recording":
                 return "RECORDING"
-            if self.state == "stopping":
-                if not self._wait_for_idle():
-                    return "STOPPING"
             self.start()
             return "RECORDING"
         if command == "stop":
-            if self.state == "stopping":
-                if not self._wait_for_idle():
-                    return "STOPPING"
-                return "IDLE"
             if self.state != "recording":
                 return "IDLE"
             self.stop()
-            return "IDLE"
+            return "TRANSCRIBING"
         if command == "shutdown":
-            if self.state == "stopping":
-                self._wait_for_idle()
-            elif self.state == "recording":
+            if self.state == "recording":
                 self.stop()
+            self.shutdown()
             return "SHUTDOWN"
 
         log.warning("Unknown command: %s", command)
         return f"ERROR unknown command: {command}"
 
     def start(self) -> None:
-        if self.state == "stopping":
-            if not self._wait_for_idle():
-                log.warning("Start blocked — previous stop still in progress")
-                return
-
         with self._lock:
             if self._state == "recording":
                 log.debug("Already recording")
                 return
             self._recorder.start()
             self._state = "recording"
-            self._set_overlay("recording")
-            self._notify("Dictation started")
 
+        self._refresh_overlay()
+        self._notify("Dictation started")
         log.info("Dictation recording active — speak now")
 
     def stop(self) -> None:
@@ -123,36 +122,80 @@ class DictationSession:
             if self._state != "recording":
                 log.debug("Stop ignored, state=%s", self._state)
                 return
-            self._state = "stopping"
-
-        self._set_overlay("stopping")
-
-        try:
             log.info("Stopping dictation ...")
             self._recorder.stop()
             audio = self._recorder.get_audio()
+            self._state = "idle"
+            self._pending += 1
 
-            final_text = ""
-            log.info("Running transcription ...")
-            try:
-                final_text = self._transcriber.transcribe(audio)
-            except Exception as exc:
-                log.exception("Transcription failed: %s", exc)
+        self._jobs.put(audio)
+        self._refresh_overlay()
+        self._notify("Dictation stopped")
+        log.info("Dictation idle (transcription queued)")
 
-            try:
-                if final_text:
-                    log.info("Typing transcript (%d chars)", len(final_text))
-                    self._typer.type_transcript(final_text)
-                else:
-                    log.warning("No speech detected in recording")
-            except RuntimeError as exc:
-                log.error("Failed to type transcript: %s", exc)
-        finally:
+    def shutdown(self, timeout: float = _SHUTDOWN_DRAIN_TIMEOUT_S) -> None:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
             with self._lock:
-                self._state = "idle"
-            self._set_overlay("hidden")
-            self._notify("Dictation stopped")
-            log.info("Dictation idle")
+                pending = self._pending
+            if pending == 0:
+                break
+            time.sleep(0.05)
+
+        with self._lock:
+            pending = self._pending
+        if pending > 0:
+            log.warning(
+                "Shutting down with %d transcription job(s) still pending after %.0fs",
+                pending,
+                timeout,
+            )
+
+        self._jobs.put(None)
+        self._worker.join(timeout=max(0.0, deadline - time.monotonic()))
+
+    def _worker_loop(self) -> None:
+        while True:
+            audio = self._jobs.get()
+            if audio is None:
+                self._jobs.task_done()
+                break
+
+            try:
+                final_text = ""
+                log.info("Running transcription ...")
+                try:
+                    final_text = self._transcriber.transcribe(audio)
+                except Exception as exc:
+                    log.exception("Transcription failed: %s", exc)
+
+                try:
+                    if final_text:
+                        log.info("Typing transcript (%d chars)", len(final_text))
+                        self._typer.type_transcript(final_text)
+                    else:
+                        log.warning("No speech detected in recording")
+                except RuntimeError as exc:
+                    log.error("Failed to type transcript: %s", exc)
+            finally:
+                with self._lock:
+                    self._pending -= 1
+                self._refresh_overlay()
+                self._jobs.task_done()
+
+    def _refresh_overlay(self) -> None:
+        with self._lock:
+            recording = self._state == "recording"
+            pending = self._pending
+
+        if recording:
+            overlay_state: OverlayState = "recording"
+        elif pending > 0:
+            overlay_state = "stopping"
+        else:
+            overlay_state = "hidden"
+
+        self._set_overlay(overlay_state)
 
     def _set_overlay(self, state: OverlayState) -> None:
         self._overlay.set_state(state)
@@ -161,8 +204,6 @@ class DictationSession:
         if not self._settings.notify:
             return
         try:
-            import subprocess
-
             subprocess.run(
                 ["notify-send", "-a", "local-transcription", "Dictation", message],
                 check=False,
@@ -262,8 +303,10 @@ class DictationDaemon:
 
     def _cleanup(self) -> None:
         log.info("Cleaning up daemon")
-        if self._session and self._session.state == "recording":
-            self._session.stop()
+        if self._session:
+            if self._session.state == "recording":
+                self._session.stop()
+            self._session.shutdown()
         if self._overlay:
             self._overlay.stop()
             self._overlay = None

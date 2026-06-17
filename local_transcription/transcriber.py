@@ -142,6 +142,6 @@ class Transcriber:
         log.info(
             "Transcript in %.2fs: %r",
             time.perf_counter() - started,
-            text[:120] + ("..." if len(text) > 120 else ""),
+            text,
         )
         return text
