@@ -26,6 +26,18 @@ class TextOutput(ABC):
         raise NotImplementedError
 
 
+def _wl_copy(text: str) -> bool:
+    try:
+        result = subprocess.run(
+            ["wl-copy"],
+            input=text.encode("utf-8"),
+            check=False,
+        )
+    except OSError:
+        return False
+    return result.returncode == 0
+
+
 def _paste_command(*, shift: bool = False) -> list[str] | None:
     """Return a command that sends Ctrl+V or Ctrl+Shift+V."""
     if shutil.which("wtype"):
@@ -127,7 +139,7 @@ class ClipboardOutput(TextOutput):
 
         previous = self._read_clipboard() if self._restore else None
 
-        if subprocess.run(["wl-copy", "--", text], check=False).returncode != 0:
+        if not _wl_copy(text):
             log.error("wl-copy failed to set clipboard")
             return False
 
@@ -142,7 +154,7 @@ class ClipboardOutput(TextOutput):
             # Give the target app a moment to consume the paste before
             # we put the old clipboard content back.
             time.sleep(max(self._paste_delay_s, 0.1))
-            subprocess.run(["wl-copy", "--", previous], check=False)
+            _wl_copy(previous)
 
         return ok
 
@@ -182,7 +194,9 @@ class YdotoolOutput(TextOutput):
     def type_text(self, text: str) -> bool:
         if not text:
             return True
-        return subprocess.run(["ydotool", "type", "--", text], check=False).returncode == 0
+        return (
+            subprocess.run(["ydotool", "type", "--", text], check=False).returncode == 0
+        )
 
 
 def create_output(
@@ -218,7 +232,9 @@ def create_output(
             continue
         if name == "clipboard":
             if not ClipboardOutput.available():
-                log.debug("clipboard backend unavailable (need wl-copy + wtype/ydotool)")
+                log.debug(
+                    "clipboard backend unavailable (need wl-copy + wtype/ydotool)"
+                )
                 continue
         elif not shutil.which(name):
             log.debug("Typing backend %s not found in PATH", name)
